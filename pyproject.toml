@@ -1,0 +1,20 @@
+[project]
+name = "railway-iac"
+version = "0.1.0"
+description = "Thin Railway Infrastructure as Code authoring helpers (Python)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.urls]
+Homepage = "https://docs.railway.com/infrastructure-as-code"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
