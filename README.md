@@ -1,18 +1,28 @@
 # Thin Railway Infrastructure as Code authoring helpers for Python.
-#
-# Install: `pip install -e .` then author `.railway/railway.py`:
-#
-#   from railway_iac import define_railway, project, service
-#
-#   PARTIAL = "api"
-#
-#   @define_railway
-#   def main(ctx=None):
-#       web = service("web", build="pip install -r requirements.txt", start="gunicorn app:app")
-#       return project("my-app", resources=[web])
-#
-# The CLI evaluates this file and diffs against the linked environment.
-# Config as Code migration lives in the CLI (`railway config migrate --lang py`).
-# Multi-repo: set module-level `PARTIAL = "api"` (same role as `export const partial` in TypeScript).
-#
-# See https://docs.railway.com/infrastructure-as-code
+
+Install: `pip install -e .` then author `.railway/railway.py`. Prefer **one
+file per project** that owns the whole environment. Named partials are a last
+resort for split repos that cannot share a file.
+
+```python
+from railway_iac import define_railway, github, postgres, project, service
+
+@define_railway
+def main(ctx=None):
+    db = postgres("db")
+    web = service(
+        "web",
+        source=github("org/app"),
+        start="gunicorn app:app",
+        env={"DATABASE_URL": db.env.DATABASE_URL},
+    )
+    return project("my-app", resources=[db, web])
+```
+
+The CLI evaluates this file and diffs against the linked environment.
+Config as Code migration lives in the CLI (`railway config migrate --lang py`).
+
+Last resort only: set module-level `PARTIAL = "api"` (same role as
+`export const partial` in TypeScript). Do not rename a partial after apply.
+
+See https://docs.railway.com/infrastructure-as-code
