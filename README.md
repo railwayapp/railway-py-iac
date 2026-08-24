@@ -1,4 +1,4 @@
-# Thin Railway Infrastructure as Code authoring helpers for Python.
+# Railway Infrastructure as Code (IaC) authoring helpers for Python.
 
 Install: `pip install -e .` then author `.railway/railway.py`. Prefer **one
 file per project** that owns the whole environment. Named partials are a last
