@@ -1,5 +1,5 @@
 [project]
-name = "railway-iac"
+name = "railway-sdk"
 version = "0.2.0"
 description = "Thin Railway Infrastructure as Code authoring helpers (Python)"
 readme = "README.md"
