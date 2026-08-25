@@ -1,11 +1,12 @@
 # Railway Infrastructure as Code (IaC) authoring helpers for Python.
 
-Install: `pip install -e .` then author `.railway/railway.py`. Prefer **one
-file per project** that owns the whole environment. Named partials are a last
-resort for split repos that cannot share a file.
+Install: `pip install railway-sdk` (or `pip install -e .` from this repo) then
+author `.railway/railway.py`. Prefer **one file per project** that owns the
+whole environment. Named partials are a last resort for split repos that cannot
+share a file.
 
 ```python
-from railway_iac import define_railway, github, postgres, project, service
+from railway_sdk import define_railway, github, postgres, project, service
 
 @define_railway
 def main(ctx=None):
