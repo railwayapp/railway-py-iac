@@ -32,7 +32,7 @@ def test_cli_eval_wrapper_loads_sdk(tmp_path: Path):
 
             @define_railway
             def main(ctx=None):
-                web = service("api", start="echo api")
+                web = service("api", start="echo api", tracing={"enabled": True, "autoInstrumentation": True})
                 return project("app", resources=[web])
             """
         )
@@ -48,3 +48,4 @@ def test_cli_eval_wrapper_loads_sdk(tmp_path: Path):
     resources = payload["project"]["resources"]
     assert resources[0]["address"] == "service.api"
     assert resources[0]["deploy"]["startCommand"] == "echo api"
+    assert resources[0]["tracing"] == {"enabled": True, "autoInstrumentation": True}
