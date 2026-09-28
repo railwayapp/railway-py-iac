@@ -300,6 +300,9 @@ def _service_node(name: str, config: Mapping[str, Any]) -> dict[str, Any]:
     networking = _normalize_networking(config)
     if networking is not None:
         node["networking"] = networking
+    tracing = _normalize_tracing(config.get("tracing"))
+    if tracing is not None:
+        node["tracing"] = tracing
     variables = config.get("env") or config.get("variables")
     if variables:
         merged = {**(config.get("variables") or {}), **(config.get("env") or {})}
@@ -401,6 +404,30 @@ def _normalize_networking(config: Mapping[str, Any]) -> dict[str, Any] | None:
     elif config.get("tcpProxies"):
         tcp_proxies = {str(port): {} for port in config["tcpProxies"]}
     return _prune({**(config.get("networking") or {}), "customDomains": custom_domains, "tcpProxies": tcp_proxies})
+
+
+_TRACING_SWITCHES = ("enabled", "autoInstrumentation")
+
+
+def _normalize_tracing(tracing: Any) -> dict[str, bool] | None:
+    """Per-environment tracing switches, Railway's ``services[id].tracing``.
+
+    Railway only serialises the switches that are on, so a ``None`` switch is
+    dropped and an empty block is no block at all.
+    """
+    if tracing is None:
+        return None
+    if not isinstance(tracing, Mapping):
+        raise ValueError("tracing must be a mapping with `enabled` and/or `autoInstrumentation` booleans.")
+    unknown = sorted(str(key) for key in tracing if key not in _TRACING_SWITCHES)
+    if unknown:
+        raise ValueError(
+            f"Unknown tracing field(s): {', '.join(unknown)}. Allowed: {', '.join(_TRACING_SWITCHES)}."
+        )
+    for key, value in tracing.items():
+        if value is not None and not isinstance(value, bool):
+            raise ValueError(f"tracing.{key} must be a boolean, got {type(value).__name__}.")
+    return _prune(dict(tracing))
 
 
 def _normalize_variables(variables: Mapping[str, Any]) -> dict[str, Any]:

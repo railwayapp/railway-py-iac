@@ -1,7 +1,10 @@
+import pytest
+
 from railway_sdk import (
     bucket,
     create_railway_context,
     define_railway,
+    fn,
     github,
     group,
     image,
@@ -74,6 +77,41 @@ def test_context_helpers():
     assert not ctx.is_environment("dev")
     assert ctx.shared.STRIPE_KEY == {"type": "sharedReference", "name": "STRIPE_KEY"}
     assert len(ctx.random_string("secret")) == 24
+
+
+def test_tracing_block_passes_through():
+    both = service("web", start="./app", tracing={"enabled": True, "autoInstrumentation": True})
+    assert both.to_graph()["tracing"] == {"enabled": True, "autoInstrumentation": True}
+
+    enabled_only = service("web", start="./app", tracing={"enabled": True})
+    assert enabled_only.to_graph()["tracing"] == {"enabled": True}
+
+    # A false switch is authored as-is; the CLI treats it the same as absent.
+    off = service("web", start="./app", tracing={"enabled": False})
+    assert off.to_graph()["tracing"] == {"enabled": False}
+
+    worker = fn("worker", start="./worker", tracing={"enabled": True})
+    assert worker.to_graph()["tracing"] == {"enabled": True}
+    assert worker.to_graph()["kind"] == "function"
+
+
+def test_tracing_none_switches_are_pruned():
+    node = service("web", start="./app", tracing={"enabled": True, "autoInstrumentation": None}).to_graph()
+    assert node["tracing"] == {"enabled": True}
+
+    assert "tracing" not in service("web", start="./app", tracing={"enabled": None}).to_graph()
+    assert "tracing" not in service("web", start="./app", tracing={}).to_graph()
+    assert "tracing" not in service("web", start="./app", tracing=None).to_graph()
+    assert "tracing" not in service("web", start="./app").to_graph()
+
+
+def test_tracing_rejects_bad_input():
+    with pytest.raises(ValueError, match="Unknown tracing field"):
+        service("web", tracing={"enabled": True, "sampleRate": 0.5})
+    with pytest.raises(ValueError, match="tracing.enabled must be a boolean"):
+        service("web", tracing={"enabled": "yes"})
+    with pytest.raises(ValueError, match="tracing must be a mapping"):
+        service("web", tracing=True)
 
 
 def test_ref_and_preserve():

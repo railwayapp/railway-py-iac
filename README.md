@@ -16,6 +16,7 @@ def main(ctx=None):
         source=github("org/app"),
         start="gunicorn app:app",
         env={"DATABASE_URL": db.env.DATABASE_URL},
+        tracing={"enabled": True},
     )
     return project("my-app", resources=[db, web])
 ```
