@@ -3,14 +3,18 @@ import pytest
 from railway_sdk import (
     bucket,
     create_railway_context,
+    database,
     define_railway,
     fn,
     github,
     group,
     image,
+    mongo,
+    mysql,
     postgres,
     preserve,
     project,
+    redis,
     ref,
     service,
     volume,
@@ -39,7 +43,8 @@ def test_github_source_and_env_refs():
     )
     node = api.to_graph()
     assert node["kind"] == "github"
-    assert node["source"] == {"type": "github", "repo": "org/api", "branch": "main"}
+    assert node["source"] == {"type": "github", "repo": "org/api"}
+    assert "branch" not in node["source"]
     assert node["variables"]["DATABASE_URL"] == {
         "type": "reference",
         "resource": "database.db",
@@ -77,6 +82,69 @@ def test_context_helpers():
     assert not ctx.is_environment("dev")
     assert ctx.shared.STRIPE_KEY == {"type": "sharedReference", "name": "STRIPE_KEY"}
     assert len(ctx.random_string("secret")) == 24
+    assert ctx.pr is None
+
+
+def test_context_pr_from_cli_json():
+    ctx = create_railway_context(
+        {
+            "environment": "pr-12",
+            "pr": {"number": 12, "branch": "feat/login", "base": "main"},
+        }
+    )
+    assert ctx.pr.number == 12
+    assert ctx.pr.branch == "feat/login"
+    assert ctx.pr.base == "main"
+    assert create_railway_context(pr=None).pr is None
+    with pytest.raises(ValueError, match="number, branch, and base"):
+        create_railway_context(pr={"number": 1})
+
+
+def test_project_variable_policy_reaches_payload():
+    policy = {"managed": True, "ignore": ["DOPPLER_*", "metabase/*"]}
+    web = service("web", variables={"TOKEN": "secret"})
+    graph = project("app", resources=[web], variables=policy).to_graph()
+    assert graph["variables"] == policy
+    assert graph["resources"][0]["variables"] == {"TOKEN": {"type": "literal", "value": "secret"}}
+    assert "managed" not in graph["resources"][0]
+    with pytest.raises(ValueError, match="managed must be a boolean"):
+        project("app", variables={"managed": "yes"})
+
+
+def test_github_omitted_branch_is_environment_owned():
+    assert github("org/app") == {"type": "github", "repo": "org/app"}
+    assert "branch" not in github("org/app", branch=None)
+    assert github("org/app", branch="release")["branch"] == "release"
+    assert service("web", source={"repo": "org/app"}).to_graph()["source"] == {
+        "type": "github",
+        "repo": "org/app",
+    }
+
+
+def test_environments_reach_payload():
+    envs = ["production", "staging"]
+    nodes = [
+        service("web", environments=envs),
+        fn("job", environments=envs),
+        postgres("pg", environments=envs),
+        mysql("sql", environments=envs),
+        redis("cache", environments=envs),
+        mongo("docs", environments=envs),
+        database("custom", "private", image="custom:1", environments=envs),
+        bucket("media", environments=envs),
+        volume("data", environments=envs),
+        group("app", environments=envs),
+    ]
+    for node in nodes:
+        graph = node.to_graph()
+        assert graph["environments"] == envs
+        assert graph.get("config", {}).get("environments") is None
+    grouped = group("app", [service("web")], environments=["production"])
+    assert grouped[0].to_graph()["environments"] == ["production"]
+    assert "environments" not in grouped[1].to_graph()
+    assert "environments" not in service("web").to_graph()
+    with pytest.raises(ValueError, match="environments must be a list"):
+        service("web", environments="production")
 
 
 def test_tracing_block_passes_through():
