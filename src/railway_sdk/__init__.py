@@ -10,6 +10,7 @@ Prefer one file that owns the whole environment. Set module-level
 from __future__ import annotations
 
 import hashlib
+from types import SimpleNamespace
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 __all__ = [
@@ -105,6 +106,8 @@ class RailwayContext(dict):
         super().__init__(payload)
         self.environment = payload.get("environment") or payload.get("environmentName")
         self.shared = _SharedRefs()
+        # Absent or null in the CLI context JSON. Never invent a pull request.
+        self.pr = _parse_pr(payload.get("pr"))
 
     def random_string(self, label: str = "random", bytes: int = 12) -> str:
         seed = f"railway-iac:{self.environment or 'default'}:{label}"
@@ -130,13 +133,27 @@ def project(name: str, definition: Mapping[str, Any] | None = None, **kwargs: An
     payload = {**(definition or {}), **kwargs}
     resources = payload.pop("resources", None)
     services = payload.pop("services", None)
+    if "variables" in payload:
+        policy = payload.pop("variables")
+        if policy is not None:
+            normalized = _normalize_variable_policy(policy)
+            if normalized:
+                payload["variables"] = normalized
     return Project(name, _flatten(resources if resources is not None else services or []), payload)
 
 
-def github(repo: str, **options: Any) -> dict[str, Any]:
+def github(repo: str, branch: str | None = None, **options: Any) -> dict[str, Any]:
     if options.get("autoUpdates") is not None:
         raise ValueError("Image auto updates are only supported for Docker image sources.")
-    return _prune({"type": "github", "repo": repo, "branch": options.pop("branch", "main"), **options})
+    # Omitted branch is environment-owned. Do not default it to "main".
+    if branch is None:
+        branch = options.pop("branch", None)
+    else:
+        options.pop("branch", None)
+    source: dict[str, Any] = {"type": "github", "repo": repo, **options}
+    if branch is not None:
+        source["branch"] = branch
+    return _prune(source)
 
 
 def image(image_name: str, **options: Any) -> dict[str, Any]:
@@ -222,36 +239,37 @@ def database(name: str, engine: str, **options: Any) -> Service:
         node["defaultMountPath"] = options["defaultMountPath"]
     if options.get("region"):
         node["deploy"] = {"multiRegionConfig": {options["region"]: {"numReplicas": 1}}}
+    if options.get("environments") is not None:
+        node["environments"] = _normalize_environments(options["environments"])
     return Service(node)
 
 
 def volume(name: str, config: Mapping[str, Any] | None = None, **extra: Any) -> Service:
-    return Service(
-        {
-            "address": f"volume.{name}",
-            "type": "volume",
-            "name": name,
-            "config": {**(config or {}), **extra},
-        }
-    )
+    return _config_resource("volume", name, config, extra)
 
 
 def bucket(name: str, config: Mapping[str, Any] | None = None, **extra: Any) -> Service:
-    return Service(
-        {
-            "address": f"bucket.{name}",
-            "type": "bucket",
-            "name": name,
-            "config": {**(config or {}), **extra},
-        }
-    )
+    return _config_resource("bucket", name, config, extra)
 
 
-def group(name: str, resources: Sequence[Any] | Mapping[str, Any] | None = None, options: Mapping[str, Any] | None = None) -> Service | list[Any]:
+def group(
+    name: str,
+    resources: Sequence[Any] | Mapping[str, Any] | None = None,
+    options: Mapping[str, Any] | None = None,
+    *,
+    environments: Sequence[str] | None = None,
+) -> Service | list[Any]:
     if isinstance(resources, Mapping) and options is None:
         options = resources
         resources = None
-    node = Service({"address": f"group.{name}", "type": "group", "name": name, **(options or {})})
+    opts = dict(options or {})
+    if environments is not None:
+        opts["environments"] = environments
+    if opts.get("environments") is not None:
+        opts["environments"] = _normalize_environments(opts["environments"])
+    elif "environments" in opts:
+        del opts["environments"]
+    node = Service({"address": f"group.{name}", "type": "group", "name": name, **opts})
     if resources is None:
         return node
     tagged = []
@@ -311,6 +329,8 @@ def _service_node(name: str, config: Mapping[str, Any]) -> dict[str, Any]:
     for key in ("configFile", "parentServiceId", "groupId", "clusterRole", "replicaConfig", "clusterDisplay"):
         if config.get(key) is not None:
             node[key] = config[key]
+    if config.get("environments") is not None:
+        node["environments"] = _normalize_environments(config["environments"])
     return node
 
 
@@ -320,7 +340,15 @@ def _normalize_source(source: Any, root_directory: str | None) -> dict[str, Any]
     if isinstance(source, Mapping) and source.get("type"):
         return _prune({**source, "rootDirectory": source.get("rootDirectory") or root_directory})
     if isinstance(source, Mapping) and source.get("repo"):
-        return _prune({"type": "github", "repo": source["repo"], "branch": source.get("branch") or "main", "rootDirectory": root_directory})
+        # Same rule as github(): a missing branch stays environment-owned.
+        return _prune(
+            {
+                "type": "github",
+                "repo": source["repo"],
+                "branch": source.get("branch"),
+                "rootDirectory": root_directory,
+            }
+        )
     if isinstance(source, Mapping) and source.get("image"):
         return _prune({"type": "image", "image": source["image"], "rootDirectory": root_directory})
     return {"type": "empty", "rootDirectory": root_directory} if root_directory else None
@@ -428,6 +456,76 @@ def _normalize_tracing(tracing: Any) -> dict[str, bool] | None:
         if value is not None and not isinstance(value, bool):
             raise ValueError(f"tracing.{key} must be a boolean, got {type(value).__name__}.")
     return _prune(dict(tracing))
+
+
+_VARIABLE_POLICY_KEYS = ("managed", "ignore")
+
+
+def _normalize_variable_policy(policy: Any) -> dict[str, Any]:
+    if not isinstance(policy, Mapping):
+        raise ValueError("project variables must be a mapping with `managed` and/or `ignore`.")
+    unknown = sorted(str(key) for key in policy if key not in _VARIABLE_POLICY_KEYS)
+    if unknown:
+        raise ValueError(
+            f"Unknown project variables field(s): {', '.join(unknown)}. Allowed: managed, ignore."
+        )
+    out: dict[str, Any] = {}
+    if policy.get("managed") is not None:
+        if not isinstance(policy["managed"], bool):
+            raise ValueError("project variables.managed must be a boolean.")
+        out["managed"] = policy["managed"]
+    if policy.get("ignore") is not None:
+        ignore = policy["ignore"]
+        if isinstance(ignore, str) or not isinstance(ignore, Sequence):
+            raise ValueError("project variables.ignore must be a list of patterns.")
+        patterns = list(ignore)
+        if any(not isinstance(pattern, str) or not pattern for pattern in patterns):
+            raise ValueError("project variables.ignore must be a list of patterns.")
+        out["ignore"] = patterns
+    return out
+
+
+def _normalize_environments(environments: Any) -> list[str]:
+    if isinstance(environments, str) or not isinstance(environments, Sequence):
+        raise ValueError("environments must be a list of environment names.")
+    names = list(environments)
+    if any(not isinstance(name, str) or not name for name in names):
+        raise ValueError("environments must be a list of environment names.")
+    return names
+
+
+def _parse_pr(value: Any) -> SimpleNamespace | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("context pr must be an object with number, branch, and base.")
+    number = value.get("number")
+    branch = value.get("branch")
+    base = value.get("base")
+    if (
+        isinstance(number, bool)
+        or not isinstance(number, int)
+        or not isinstance(branch, str)
+        or not branch
+        or not isinstance(base, str)
+        or not base
+    ):
+        raise ValueError("context pr must include number, branch, and base.")
+    return SimpleNamespace(number=number, branch=branch, base=base)
+
+
+def _config_resource(kind: str, name: str, config: Mapping[str, Any] | None, extra: Mapping[str, Any]) -> Service:
+    merged = {**(config or {}), **extra}
+    environments = merged.pop("environments", None)
+    node: dict[str, Any] = {
+        "address": f"{kind}.{name}",
+        "type": kind,
+        "name": name,
+        "config": merged,
+    }
+    if environments is not None:
+        node["environments"] = _normalize_environments(environments)
+    return Service(node)
 
 
 def _normalize_variables(variables: Mapping[str, Any]) -> dict[str, Any]:

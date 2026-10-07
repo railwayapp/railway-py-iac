@@ -49,3 +49,35 @@ def test_cli_eval_wrapper_loads_sdk(tmp_path: Path):
     assert resources[0]["address"] == "service.api"
     assert resources[0]["deploy"]["startCommand"] == "echo api"
     assert resources[0]["tracing"] == {"enabled": True, "autoInstrumentation": True}
+
+
+def test_cli_eval_payload_includes_policy_environments_and_branchless_github(tmp_path: Path):
+    source = tmp_path / "railway.py"
+    source.write_text(
+        textwrap.dedent(
+            """
+            from railway_sdk import github, postgres, project, service
+
+            def main():
+                db = postgres("db", environments=["production"])
+                web = service("web", source=github("org/app"), environments=["production", "staging"])
+                return project(
+                    "app",
+                    resources=[db, web],
+                    variables={"managed": True, "ignore": ["DOPPLER_*", "metabase/*"]},
+                )
+            """
+        )
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", CLI_EVAL, str(source)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(result.stdout)["project"]
+    assert payload["variables"] == {"managed": True, "ignore": ["DOPPLER_*", "metabase/*"]}
+    assert payload["resources"][0]["environments"] == ["production"]
+    assert payload["resources"][1]["environments"] == ["production", "staging"]
+    assert payload["resources"][1]["source"] == {"type": "github", "repo": "org/app"}
+    assert "branch" not in payload["resources"][1]["source"]

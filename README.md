@@ -21,6 +21,39 @@ def main(ctx=None):
     return project("my-app", resources=[db, web])
 ```
 
+Variable ownership is project-wide. `variables` is only a policy on `project`
+(`service` still uses `variables` / `env` for values, not this policy):
+
+```python
+return project(
+    "my-app",
+    resources=[db, web],
+    variables={"managed": True, "ignore": ["DOPPLER_*", "metabase/*"]},
+)
+```
+
+`managed` marks variables as IaC-owned. `ignore` lists patterns left untouched.
+
+`github(repo)` with no `branch` leaves the branch environment-owned. Pass
+`branch=` only to pin one:
+
+```python
+service("web", source=github("org/app"))  # environment owns the branch
+service("web", source=github("org/app", branch="main"))
+```
+
+Limit a resource to named environments with `environments` on `service`, `fn`,
+database helpers (`postgres`, `mysql`, `redis`, `mongo`, `database`), `bucket`,
+`volume`, or `group`:
+
+```python
+service("web", environments=["production", "staging"])
+```
+
+The CLI context JSON may include `pr` as
+`{"number": 12, "branch": "feat", "base": "main"}`. `ctx.pr` is that object,
+or `None` when the key is absent.
+
 The CLI evaluates this file and diffs against the linked environment.
 Config as Code migration lives in the CLI (`railway config migrate --lang py`).
 
